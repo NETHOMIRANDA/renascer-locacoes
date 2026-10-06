@@ -1,0 +1,18 @@
+# Dados de clientes e documentos gerados (nunca enviar ao GitHub)
+*.db
+*.sqlite
+PDF/
+Pedido_*.html
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Backups locais
+*.bak
+*.bak_*
+
+# Segredos
+.env

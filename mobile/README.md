@@ -1,16 +1,41 @@
-# React + Vite
+# Renascer Locações — App Mobile (PWA)
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Aplicativo mobile (Progressive Web App) com todas as funções do sistema desktop:
+orçamentos, pedidos/entregas, clientes, catálogo e relatórios financeiros.
 
-Currently, two official plugins are available:
+## Como rodar (desenvolvimento)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+npm install
+npm run dev
+```
 
-## React Compiler
+Acesse `http://localhost:5173` no navegador ou no celular (mesma rede Wi-Fi).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Build de produção
 
-## Expanding the Oxlint configuration
+```bash
+npm run build
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+Os arquivos ficam em `dist/`. Faça deploy dessa pasta em Vercel, Netlify, GitHub Pages ou qualquer host estático.
+
+## Configuração
+
+Na primeira abertura, informe a **SUPABASE_URL** e a **service_role key** do seu projeto Supabase
+(mesmas credenciais do sistema desktop). Os dados são lidos/gravados diretamente no Supabase.
+
+## Instalar no celular
+
+Após publicar, abra a URL no navegador do celular e use "Adicionar à tela inicial"
+para instalar como aplicativo (PWA).
+
+## Funcionalidades
+
+- Dashboard com contagens
+- Orçamentos: criar, editar, enviar para pedido, cancelar, gerar PDF
+- Pedidos/Entregas: criar, editar, marcar entregue/recolhido, arquivar, direcionar para orçamento, gerar PDF
+- Clientes: cadastro com busca automática e aviso de duplicado
+- Catálogo: CRUD de itens e estoque
+- Relatórios: resumo por status, itens mais locados, perdas, projeção
+- Geração de PDF no próprio aparelho

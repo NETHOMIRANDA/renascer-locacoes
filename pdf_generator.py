@@ -831,3 +831,445 @@ def gerar_impressao_rapida_multipla(lista_pedidos, catalogo=None, caminho_saida=
 
     doc.build(story)
     return caminho_final
+
+
+# =========================================================
+# RELATÓRIOS FINANCEIROS DINÂMICOS (NOVOS)
+# =========================================================
+def _estilos_relatorio():
+    """Estilos padronizados para os relatórios financeiros."""
+    styles = getSampleStyleSheet()
+    return {
+        "marca": ParagraphStyle('RMarca', parent=styles['Normal'], fontName='Helvetica-Bold',
+                                fontSize=18, leading=20, textColor=colors.white),
+        "marca_sub": ParagraphStyle('RMarcaSub', parent=styles['Normal'], fontName='Helvetica',
+                                    fontSize=8, leading=10, textColor=colors.HexColor("#94A3B8")),
+        "titulo": ParagraphStyle('RTitulo', parent=styles['Normal'], fontName='Helvetica-Bold',
+                                 fontSize=20, leading=23, textColor=colors.white, alignment=2),
+        "meta": ParagraphStyle('RMeta', parent=styles['Normal'], fontName='Helvetica',
+                               fontSize=8.5, leading=11, textColor=colors.HexColor(COR_MUTED), spaceAfter=4),
+        "seco": ParagraphStyle('RSecao', parent=styles['Normal'], fontName='Helvetica-Bold',
+                               fontSize=9, leading=12, textColor=colors.HexColor(COR_MARINHO),
+                               spaceBefore=12, spaceAfter=4),
+        "cab": ParagraphStyle('RCab', parent=styles['Normal'], fontName='Helvetica-Bold',
+                              fontSize=8, leading=10, textColor=colors.white),
+        "cab_c": ParagraphStyle('RCabC', parent=styles['Normal'], fontName='Helvetica-Bold',
+                                fontSize=8, leading=10, textColor=colors.white, alignment=1),
+        "cab_r": ParagraphStyle('RCabR', parent=styles['Normal'], fontName='Helvetica-Bold',
+                                fontSize=8, leading=10, textColor=colors.white, alignment=2),
+        "cel": ParagraphStyle('RCel', parent=styles['Normal'], fontName='Helvetica',
+                              fontSize=8.5, leading=11, textColor=colors.HexColor(COR_TEXTO)),
+        "cel_c": ParagraphStyle('RCelC', parent=styles['Normal'], fontName='Helvetica',
+                                fontSize=8.5, leading=11, textColor=colors.HexColor(COR_TEXTO), alignment=1),
+        "cel_r": ParagraphStyle('RCelR', parent=styles['Normal'], fontName='Helvetica',
+                                fontSize=8.5, leading=11, textColor=colors.HexColor(COR_TEXTO), alignment=2),
+        "cel_b_r": ParagraphStyle('RCelBR', parent=styles['Normal'], fontName='Helvetica-Bold',
+                                  fontSize=8.5, leading=11, textColor=colors.HexColor(COR_TEXTO), alignment=2),
+        "destaque": ParagraphStyle('RDestaque', parent=styles['Normal'], fontName='Helvetica-Bold',
+                                   fontSize=10, leading=13, textColor=colors.HexColor("#059669")),
+        "alerta": ParagraphStyle('RAlerta', parent=styles['Normal'], fontName='Helvetica-Bold',
+                                 fontSize=10, leading=13, textColor=colors.HexColor("#DC2626")),
+    }
+
+
+def _tabela_relatorio(data, col_widths, estilos, totaliza=False):
+    """Monta uma tabela de relatório com cabeçalho escuro e filetes suaves."""
+    style = [
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor(COR_MARINHO)),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor(COR_FUNDO_SUAVE)]),
+        ('LINEBELOW', (0, 1), (-1, -1), 0.5, colors.HexColor(COR_LINHA)),
+        ('BOX', (0, 0), (-1, -1), 0.8, colors.HexColor(COR_LINHA)),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('TOPPADDING', (0, 0), (-1, -1), 6), ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]
+    if totaliza:
+        style += [
+            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor("#E2E8F0")),
+            ('LINEABOVE', (0, -1), (-1, -1), 1.2, colors.HexColor(COR_MARINHO)),
+        ]
+    t = Table(data, colWidths=col_widths, repeatRows=1)
+    t.setStyle(TableStyle(style))
+    return t
+
+
+def _cabecalho_relatorio(estilos, titulo, subtitulo):
+    """Faixa de identidade visual + cabeçalho do relatório."""
+    story = []
+    t_head = Table([
+        [[Paragraph("RENASCER", estilos["marca"]),
+          Paragraph("LOCAÇÕES E EVENTOS", estilos["marca_sub"])]],
+        [Paragraph(titulo, estilos["titulo"])],
+    ], colWidths=[257.5, 257.5])
+    t_head.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor(COR_MARINHO)),
+        ('LEFTPADDING', (0, 0), (0, 0), 18), ('RIGHTPADDING', (0, 0), (0, 0), 18),
+        ('TOPPADDING', (0, 0), (-1, -1), 16), ('BOTTOMPADDING', (0, 0), (-1, -1), 14),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('LINEBELOW', (0, 0), (-1, -1), 4, colors.HexColor("#2563EB")),
+    ]))
+    story.append(t_head)
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(subtitulo, estilos["meta"]))
+    return story
+
+
+# =========================================================
+# 1) RESUMO FINANCEIRO — SEMANAL / MENSAL / ANUAL
+# =========================================================
+def _bloco_resumo_periodo(estilos, titulo, agregados, col_periodo):
+    elementos = [Paragraph(titulo, estilos["seco"]),
+                 HRFlowable(width="100%", thickness=0.8, color=colors.HexColor(COR_LINHA), spaceAfter=5)]
+
+    data = [[Paragraph(col_periodo, estilos["cab"]),
+             Paragraph("PEDIDOS", estilos["cab_c"]),
+             Paragraph("ITENS", estilos["cab_c"]),
+             Paragraph("BRUTO", estilos["cab_r"]),
+             Paragraph("DESCONTOS", estilos["cab_r"]),
+             Paragraph("LÍQUIDO", estilos["cab_r"]),
+             Paragraph("TICKET MÉD.", estilos["cab_r"])]]
+
+    tot_ped = tot_itens = 0
+    tot_bruto = tot_desc = tot_liq = 0.0
+
+    for a in agregados:
+        data.append([
+            Paragraph(a["rotulo"], estilos["cel"]),
+            Paragraph(str(a["qtd_pedidos"]), estilos["cel_c"]),
+            Paragraph(str(a["itens"]), estilos["cel_c"]),
+            Paragraph(_moeda(a["bruto"]), estilos["cel_r"]),
+            Paragraph(_moeda(a["descontos"]), estilos["cel_r"]),
+            Paragraph(f"<b>{_moeda(a['liquido'])}</b>", estilos["cel_r"]),
+            Paragraph(_moeda(a["ticket"]), estilos["cel_r"]),
+        ])
+        tot_ped += a["qtd_pedidos"]
+        tot_itens += a["itens"]
+        tot_bruto += a["bruto"]
+        tot_desc += a["descontos"]
+        tot_liq += a["liquido"]
+
+    if agregados:
+        ticket_geral = (tot_liq / tot_ped) if tot_ped else 0.0
+        data.append([
+            Paragraph("TOTAL", estilos["cel"]),
+            Paragraph(f"<b>{tot_ped}</b>", estilos["cel_c"]),
+            Paragraph(f"<b>{tot_itens}</b>", estilos["cel_c"]),
+            Paragraph(f"<b>{_moeda(tot_bruto)}</b>", estilos["cel_r"]),
+            Paragraph(f"<b>{_moeda(tot_desc)}</b>", estilos["cel_r"]),
+            Paragraph(f"<b>{_moeda(tot_liq)}</b>", estilos["cel_b_r"]),
+            Paragraph(_moeda(ticket_geral), estilos["cel_r"]),
+        ])
+
+    elementos.append(_tabela_relatorio(
+        data, [145, 58, 46, 67, 67, 67, 65], estilos, totaliza=bool(agregados)))
+    return elementos
+
+
+def gerar_relatorio_resumo_completo(agregados_semana, agregados_mes, agregados_ano,
+                                     filtro_descricao="Todos os períodos", caminho_saida=None):
+    """Gera o relatório de resumo financeiro semanal, mensal e anual."""
+    if not caminho_saida:
+        caminho_saida = f"relatorio_resumo_financeiro_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.pdf"
+    caminho_final = _obter_caminho_final(caminho_saida)
+
+    doc = SimpleDocTemplate(caminho_final, pagesize=A4, leftMargin=40, rightMargin=40,
+                            topMargin=34, bottomMargin=56,
+                            title="Relatório de Resumo Financeiro - Renascer Locações",
+                            author="Renascer Locações e Eventos")
+    est = _estilos_relatorio()
+    story = _cabecalho_relatorio(
+        est, "RESUMO FINANCEIRO",
+        f"Emitido em <b>{datetime.now().strftime('%d/%m/%Y')}</b> às {datetime.now().strftime('%H:%M')}"
+        f" &nbsp;|&nbsp; Período: <b>{xml_escape(filtro_descricao)}</b>")
+
+    story += _bloco_resumo_periodo(est, "RESUMO SEMANAL — ORÇAMENTOS E PEDIDOS", agregados_semana, "SEMANA")
+    story += _bloco_resumo_periodo(est, "RESUMO MENSAL — ORÇAMENTOS E PEDIDOS", agregados_mes, "MÊS")
+    story += _bloco_resumo_periodo(est, "RESUMO ANUAL — ORÇAMENTOS E PEDIDOS", agregados_ano, "ANO")
+
+    doc.build(story, canvasmaker=_fabrica_canvas_documento("Renascer Locações  |  Relatório de Resumo Financeiro"))
+    return caminho_final
+
+
+# =========================================================
+# 2) RANKING DOS ITENS MAIS LOCADOS (CARROS-CHEFES)
+# =========================================================
+def gerar_relatorio_ranking_itens(ranking, agrupar_por="item", periodo_descricao="Todos os períodos",
+                                  caminho_saida=None):
+    """Gera o relatório de itens (ou categorias) mais locados,
+    com quantidade, valor e participação percentual."""
+    if not caminho_saida:
+        caminho_saida = f"relatorio_itens_mais_locados_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.pdf"
+    caminho_final = _obter_caminho_final(caminho_saida)
+
+    doc = SimpleDocTemplate(caminho_final, pagesize=A4, leftMargin=40, rightMargin=40,
+                            topMargin=34, bottomMargin=56,
+                            title="Ranking de Itens Mais Locados - Renascer Locações",
+                            author="Renascer Locações e Eventos")
+    est = _estilos_relatorio()
+
+    titulo = ("RANKING DOS ITENS MAIS LOCADOS" if agrupar_por == "item"
+              else "RANKING POR CATEGORIA DE MATERIAIS")
+    story = _cabecalho_relatorio(
+        est, titulo,
+        f"Emitido em <b>{datetime.now().strftime('%d/%m/%Y')}</b> às {datetime.now().strftime('%H:%M')}"
+        f" &nbsp;|&nbsp; Período: <b>{xml_escape(periodo_descricao)}</b>")
+
+    if ranking:
+        topo = ranking[0]
+        rotulo_topo = "CARRO-CHEFE (ITEM MAIS LOCADO)" if agrupar_por == "item" else "CATEGORIA DESTAQUE"
+        bloco_topo = Table([
+            [Paragraph(rotulo_topo, ParagraphStyle('TopLbl', parent=est["cab"], fontSize=7.5,
+                                                   textColor=colors.HexColor(COR_MUTED))),
+             Paragraph(_moeda(topo["valor"]), ParagraphStyle('TopVal', parent=est["cab_r"], fontSize=13))],
+            [Paragraph(f"<b>{xml_escape(topo['nome'])}</b>", est["destaque"]),
+             Paragraph(f"<b>{topo['qtd']:,}".replace(",", ".") + f" un. locadas ({topo['percentual']:.1f}% do faturamento)</b>",
+                       est["cel_r"])],
+        ], colWidths=[300, 215])
+        bloco_topo.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#ECFDF5")),
+            ('BOX', (0, 0), (-1, -1), 1, colors.HexColor("#059669")),
+            ('LEFTPADDING', (0, 0), (-1, -1), 12), ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+            ('TOPPADDING', (0, 0), (-1, -1), 8), ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(bloco_topo)
+        story.append(Spacer(1, 8))
+
+    total_qtd = sum(r["qtd"] for r in ranking)
+    total_valor = sum(r["valor"] for r in ranking)
+
+    data = [[Paragraph("POS", est["cab_c"]),
+             Paragraph("ITEM / CATEGORIA" if agrupar_por == "item" else "CATEGORIA DE MATERIAIS", est["cab"]),
+             Paragraph("CATEGORIA", est["cab"]),
+             Paragraph("QTD LOCADA", est["cab_c"]),
+             Paragraph("VALOR TOTAL", est["cab_r"]),
+             Paragraph("% FATURAMENTO", est["cab_r"])]]
+
+    for pos, r in enumerate(ranking, start=1):
+        data.append([
+            Paragraph(f"{pos:02d}", est["cel_c"]),
+            Paragraph(xml_escape(r["nome"]), est["cel"]),
+            Paragraph(xml_escape(r["categoria"] or "-"), est["cel"]),
+            Paragraph(f"{r['qtd']:,}".replace(",", "."), est["cel_c"]),
+            Paragraph(f"<b>{_moeda(r['valor'])}</b>", est["cel_r"]),
+            Paragraph(f"{r['percentual']:.1f}%", est["cel_r"]),
+        ])
+
+    if ranking:
+        data.append([
+            Paragraph("", est["cel"]),
+            Paragraph("<b>TOTAL</b>", est["cel"]),
+            Paragraph("", est["cel"]),
+            Paragraph(f"<b>{total_qtd:,}".replace(",", ".") + "</b>", est["cel_c"]),
+            Paragraph(f"<b>{_moeda(total_valor)}</b>", est["cel_b_r"]),
+            Paragraph("<b>100,0%</b>", est["cel_r"]),
+        ])
+
+    story.append(_tabela_relatorio(
+        data, [40, 205, 100, 60, 55, 55], est, totaliza=bool(ranking)))
+
+    if not ranking:
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("Nenhum item encontrado para os critérios informados.", est["meta"]))
+
+    doc.build(story, canvasmaker=_fabrica_canvas_documento("Renascer Locações  |  Ranking de Itens Mais Locados"))
+    return caminho_final
+
+
+# =========================================================
+# 3) PERDAS POR SEMANA (PEDIDOS NÃO EFETIVADOS)
+# =========================================================
+def gerar_relatorio_perdas_semana(perdas, caminho_saida=None):
+    """Gera o relatório de perdas de uma semana:
+    pedidos não efetivados (orçamentos não convertidos e cancelados)."""
+    if not perdas:
+        raise ValueError("Nenhum dado de perdas informado.")
+    if not caminho_saida:
+        semana_limpa = re.sub(r'[^\w-]', '_', perdas["semana"])
+        caminho_saida = f"relatorio_perdas_{semana_limpa}_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.pdf"
+    caminho_final = _obter_caminho_final(caminho_saida)
+
+    doc = SimpleDocTemplate(caminho_final, pagesize=A4, leftMargin=40, rightMargin=40,
+                            topMargin=34, bottomMargin=56,
+                            title=f"Perdas da {perdas['semana']} - Renascer Locações",
+                            author="Renascer Locações e Eventos")
+    est = _estilos_relatorio()
+
+    story = _cabecalho_relatorio(
+        est, "PERDAS POR SEMANA",
+        f"Emitido em <b>{datetime.now().strftime('%d/%m/%Y')}</b> às {datetime.now().strftime('%H:%M')}"
+        f" &nbsp;|&nbsp; Semana de referência: <b>{xml_escape(perdas['semana'])}</b><br/>"
+        "Consideram-se perdas os pedidos com evento na semana que permaneceram como "
+        "<b>orçamento não convertido</b> ou foram <b>cancelados</b>.")
+
+    # Cartões de indicadores
+    ind = Table([
+        [Paragraph("PEDIDOS NÃO EFETIVADOS", est["cab"]),
+         Paragraph("VALOR PERDIDO (BRUTO)", est["cab"]),
+         Paragraph("PEDIDOS EFETIVADOS", est["cab"]),
+         Paragraph("TAXA DE PERDA", est["cab"])],
+        [Paragraph(f"<b>{perdas['qtd_perdidos']}</b>",
+                   ParagraphStyle('Ind1', parent=est["cel_c"], fontSize=16, leading=19)),
+         Paragraph(f"<b>{_moeda(perdas['valor_perdido'])}</b>",
+                   ParagraphStyle('Ind2', parent=est["cel_r"], fontSize=16, leading=19)),
+         Paragraph(f"<b>{perdas['qtd_efetivados']}</b>",
+                   ParagraphStyle('Ind3', parent=est["cel_c"], fontSize=16, leading=19)),
+         Paragraph(f"<b>{perdas['taxa_perda']:.1f}%</b>",
+                   ParagraphStyle('Ind4', parent=est["cel_r"], fontSize=16, leading=19,
+                                  textColor=colors.HexColor("#DC2626")))],
+    ], colWidths=[128.75, 128.75, 128.75, 128.75])
+    ind.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor(COR_MARINHO)),
+        ('BACKGROUND', (0, 1), (-1, 1), colors.HexColor(COR_FUNDO_SUAVE)),
+        ('BOX', (0, 0), (-1, -1), 0.8, colors.HexColor(COR_LINHA)),
+        ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor(COR_LINHA)),
+        ('TOPPADDING', (0, 0), (-1, -1), 7), ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    story.append(ind)
+
+    # Detalhamento das perdas
+    story.append(Paragraph("PEDIDOS NÃO EFETIVADOS NA SEMANA", est["seco"]))
+    story.append(HRFlowable(width="100%", thickness=0.8, color=colors.HexColor(COR_LINHA), spaceAfter=5))
+
+    data = [[Paragraph("ID", est["cab_c"]),
+             Paragraph("CLIENTE", est["cab"]),
+             Paragraph("DATA DO EVENTO", est["cab_c"]),
+             Paragraph("QTD. ITENS", est["cab_c"]),
+             Paragraph("VALOR BRUTO", est["cab_r"]),
+             Paragraph("SITUAÇÃO", est["cab"])]]
+
+    for p in perdas["perdidos"]:
+        data.append([
+            Paragraph(f"#{p['id']}", est["cel_c"]),
+            Paragraph(xml_escape(p["cliente"] or "-"), est["cel"]),
+            Paragraph(xml_escape(p["data_evento"] or "-"), est["cel_c"]),
+            Paragraph(str(p["qtd_itens"]), est["cel_c"]),
+            Paragraph(_moeda(p["bruto"]), est["cel_r"]),
+            Paragraph(xml_escape(p["situacao"]), est["cel"]),
+        ])
+
+    if perdas["perdidos"]:
+        data.append([
+            Paragraph("", est["cel"]),
+            Paragraph("<b>TOTAL PERDIDO</b>", est["cel"]),
+            Paragraph("", est["cel"]),
+            Paragraph("", est["cel"]),
+            Paragraph(f"<b>{_moeda(perdas['valor_perdido'])}</b>", est["cel_b_r"]),
+            Paragraph("", est["cel"]),
+        ])
+
+    story.append(_tabela_relatorio(
+        data, [40, 175, 90, 60, 75, 75], est, totaliza=bool(perdas["perdidos"])))
+
+    if not perdas["perdidos"]:
+        story.append(Spacer(1, 8))
+        story.append(Paragraph(
+            "<b>Nenhuma perda identificada nesta semana</b> — todos os pedidos da semana foram efetivados. "
+            f"Total efetivado na semana: <b>{_moeda(perdas['valor_efetivado'])}</b> em "
+            f"{perdas['qtd_efetivados']} pedido(s).", est["destaque"]))
+
+    doc.build(story, canvasmaker=_fabrica_canvas_documento(
+        f"Renascer Locações  |  Perdas — {perdas['semana']}"))
+    return caminho_final
+
+
+# =========================================================
+# 4) PROJEÇÃO FUTURA (SEMANAS / MESES / ANOS)
+# =========================================================
+def _bloco_projecao(estilos, titulo, linhas, base_info):
+    elementos = [Paragraph(titulo, estilos["seco"]),
+                 Paragraph(base_info, estilos["meta"]),
+                 HRFlowable(width="100%", thickness=0.8, color=colors.HexColor(COR_LINHA), spaceAfter=5)]
+
+    data = [[Paragraph("PERÍODO PROJETADO", estilos["cab"]),
+             Paragraph("PEDIDOS PROJ.", estilos["cab_c"]),
+             Paragraph("RECEITA PROJETADA", estilos["cab_r"]),
+             Paragraph("TICKET MÉD. PROJ.", estilos["cab_r"])]]
+
+    tot_ped = 0.0
+    tot_rec = 0.0
+    for l in linhas:
+        data.append([
+            Paragraph(l["periodo"], estilos["cel"]),
+            Paragraph(f"{l['pedidos']:.1f}".replace('.', ','), estilos["cel_c"]),
+            Paragraph(f"<b>{_moeda(l['receita'])}</b>", estilos["cel_r"]),
+            Paragraph(_moeda(l["ticket"]), estilos["cel_r"]),
+        ])
+        tot_ped += l["pedidos"]
+        tot_rec += l["receita"]
+
+    if linhas:
+        ticket_geral = (tot_rec / tot_ped) if tot_ped > 0 else 0.0
+        data.append([
+            Paragraph("TOTAL PROJETADO", estilos["cel"]),
+            Paragraph(f"<b>{tot_ped:.1f}".replace('.', ',') + "</b>", estilos["cel_c"]),
+            Paragraph(f"<b>{_moeda(tot_rec)}</b>", estilos["cel_b_r"]),
+            Paragraph(_moeda(ticket_geral), estilos["cel_b_r"]),
+        ])
+
+    elementos.append(_tabela_relatorio(data, [215, 85, 110, 105], estilos, totaliza=bool(linhas)))
+    return elementos
+
+
+def gerar_relatorio_projecao_futura(proj, caminho_saida=None):
+    """Gera o relatório de projeção futura de receita
+    por semanas, meses e anos vindouros."""
+    if not proj:
+        raise ValueError("Nenhum dado de projeção informado.")
+    if not caminho_saida:
+        caminho_saida = f"relatorio_projecao_futura_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.pdf"
+    caminho_final = _obter_caminho_final(caminho_saida)
+
+    doc = SimpleDocTemplate(caminho_final, pagesize=A4, leftMargin=40, rightMargin=40,
+                            topMargin=34, bottomMargin=56,
+                            title="Projeção Futura de Receita - Renascer Locações",
+                            author="Renascer Locações e Eventos")
+    est = _estilos_relatorio()
+
+    agora = datetime.now()
+    story = _cabecalho_relatorio(
+        est, "PROJEÇÃO FUTURA DE RECEITA",
+        f"Emitido em <b>{agora.strftime('%d/%m/%Y')}</b> às {agora.strftime('%H:%M')}"
+        f" &nbsp;|&nbsp; Base histórica: <b>{proj['qtd_pedidos']}</b> pedido(s)"
+        f" / <b>{_moeda(proj['total_receita'])}</b> de receita acumulada<br/>"
+        "Projeção dinâmica calculada automaticamente a partir da média de movimento recente "
+        "(últimas 8 semanas, últimos 12 meses e últimos 5 anos).")
+
+    # Indicadores de médias
+    ind = Table([
+        [Paragraph("MÉDIA SEMANAL", est["cab"]),
+         Paragraph("MÉDIA MENSAL", est["cab"]),
+         Paragraph("MÉDIA ANUAL", est["cab"])],
+        [Paragraph(f"<b>{_moeda(proj['media_semana_rec'])}</b><br/>"
+                   f"<font size=7>{proj['media_semana_ped']:.1f} pedidos</font>".replace('.', ','),
+                   ParagraphStyle('PM1', parent=est["cel_r"], fontSize=11, leading=14)),
+         Paragraph(f"<b>{_moeda(proj['media_mes_rec'])}</b><br/>"
+                   f"<font size=7>{proj['media_mes_ped']:.1f} pedidos</font>".replace('.', ','),
+                   ParagraphStyle('PM2', parent=est["cel_r"], fontSize=11, leading=14)),
+         Paragraph(f"<b>{_moeda(proj['media_ano_rec'])}</b><br/>"
+                   f"<font size=7>{proj['media_ano_ped']:.1f} pedidos</font>".replace('.', ','),
+                   ParagraphStyle('PM3', parent=est["cel_r"], fontSize=11, leading=14))],
+    ], colWidths=[171.67, 171.67, 171.66])
+    ind.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor(COR_MARINHO)),
+        ('BACKGROUND', (0, 1), (-1, 1), colors.HexColor(COR_FUNDO_SUAVE)),
+        ('BOX', (0, 0), (-1, -1), 0.8, colors.HexColor(COR_LINHA)),
+        ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor(COR_LINHA)),
+        ('TOPPADDING', (0, 0), (-1, -1), 7), ('BOTTOMPADDING', (0, 0), (-1, -1), 7),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    story.append(ind)
+
+    story += _bloco_projecao(
+        est, "PROJEÇÃO POR SEMANAS FUTURAS", proj["semanas"],
+        f"Base: média das últimas {proj['base_semanas']} semana(s) com movimento.")
+    story += _bloco_projecao(
+        est, "PROJEÇÃO POR MESES FUTUROS", proj["meses"],
+        f"Base: média dos últimos {proj['base_meses']} mês(es) com movimento.")
+    story += _bloco_projecao(
+        est, "PROJEÇÃO POR ANOS FUTUROS", proj["anos"],
+        f"Base: média dos últimos {proj['base_anos']} ano(s) com movimento.")
+
+    doc.build(story, canvasmaker=_fabrica_canvas_documento("Renascer Locações  |  Projeção Futura de Receita"))
+    return caminho_final

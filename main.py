@@ -1,5 +1,6 @@
 import sys
 import os
+import threading
 import tkinter as tk
 from tkinter import messagebox
 
@@ -10,8 +11,9 @@ if sys.platform.startswith('win'):
     except Exception:
         pass
 
-import database
+import database as database
 import pdf_generator
+import nuvem_sync
 from interface import FormularioOrcamento
 
 try:
@@ -235,6 +237,10 @@ def excluir_item_catalogo(id_item):
         app.limpar_campos_catalogo()
         carregar_tudo()
 
+def salvar_fotos_catalogo(id_item, fotos):
+    database.salvar_fotos_item_catalogo(id_item, fotos)
+    carregar_tudo()
+
 def gerar_pdf_catalogo():
     lista = database.buscar_catalogo()
     caminho = pdf_generator.gerar_pdf_catalogo(lista)
@@ -264,6 +270,111 @@ def gerar_relatorio_entrega(lista_ids):
     caminho = pdf_generator.gerar_relatorio_entregas(pedidos)
     messagebox.showinfo("Sucesso", f"Relatório de Entregas gerado com sucesso em:\n{os.path.abspath(caminho)}")
 
+
+# ---------------------------------------------------------------------------
+# RELATÓRIOS FINANCEIROS DINÂMICOS (RESUMO, RANKING, PERDAS, PROJEÇÃO)
+# ---------------------------------------------------------------------------
+def gerar_pdf_resumo_periodo(agregados_semana, agregados_mes, agregados_ano, descricao_filtro):
+    caminho = pdf_generator.gerar_relatorio_resumo_completo(
+        agregados_semana, agregados_mes, agregados_ano, descricao_filtro)
+    messagebox.showinfo("Sucesso", f"Relatório de Resumo Financeiro (semanal, mensal e anual) gerado em:\n{os.path.abspath(caminho)}")
+
+
+def gerar_pdf_ranking_itens(ranking, agrupar_por, periodo_descricao):
+    caminho = pdf_generator.gerar_relatorio_ranking_itens(ranking, agrupar_por, periodo_descricao)
+    nome = "Itens Mais Locados" if agrupar_por == "item" else "Categorias de Materiais"
+    messagebox.showinfo("Sucesso", f"Relatório de {nome} (carros-chefes) gerado em:\n{os.path.abspath(caminho)}")
+
+
+def gerar_pdf_perdas_semana(perdas):
+    caminho = pdf_generator.gerar_relatorio_perdas_semana(perdas)
+    messagebox.showinfo("Sucesso", f"Relatório de Perdas da Semana gerado em:\n{os.path.abspath(caminho)}")
+
+
+def gerar_pdf_projecao_futura(proj):
+    caminho = pdf_generator.gerar_relatorio_projecao_futura(proj)
+    messagebox.showinfo("Sucesso", f"Relatório de Projeção Futura gerado em:\n{os.path.abspath(caminho)}")
+
+# ---------------------------------------------------------------------------
+# SINCRONIZAÇÃO EM NUVEM (APP WEB / CELULAR & GOOGLE SHEETS)
+# ---------------------------------------------------------------------------
+def sincronizar_nuvem():
+    def _tarefa():
+        ok, msg, qtd_novos = nuvem_sync.sincronizar_tudo()
+        root.after(0, lambda: _pos_sincronizar(ok, msg, qtd_novos))
+    threading.Thread(target=_tarefa, daemon=True).start()
+
+def _pos_sincronizar(ok, msg, qtd_novos):
+    app.adicionar_log_nuvem(msg)
+    if qtd_novos > 0:
+        carregar_tudo()
+        messagebox.showinfo("Sincronização", f"Sincronização concluída!\n\n{msg}")
+    elif ok:
+        carregar_tudo()
+        messagebox.showinfo("Sincronização", f"Sincronização concluída!\n\n{msg}")
+    else:
+        messagebox.showwarning("Aviso de Sincronização", msg)
+
+def puxar_pedidos_nuvem():
+    def _tarefa():
+        ok, msg, qtd_novos = nuvem_sync.puxar_pedidos_nuvem()
+        def _pos():
+            app.adicionar_log_nuvem(msg)
+            if qtd_novos > 0:
+                carregar_tudo()
+                messagebox.showinfo("Novos Pedidos", msg)
+            elif ok:
+                messagebox.showinfo("Pedidos do App", msg)
+            else:
+                messagebox.showwarning("Aviso", msg)
+        root.after(0, _pos)
+    threading.Thread(target=_tarefa, daemon=True).start()
+
+def enviar_catalogo_nuvem():
+    def _tarefa():
+        ok, msg = nuvem_sync.enviar_catalogo_nuvem()
+        def _pos():
+            app.adicionar_log_nuvem(msg)
+            if ok:
+                messagebox.showinfo("Catálogo no App", msg)
+            else:
+                messagebox.showwarning("Aviso", msg)
+        root.after(0, _pos)
+    threading.Thread(target=_tarefa, daemon=True).start()
+
+def testar_conexao_nuvem():
+    def _tarefa():
+        ok, msg = nuvem_sync.testar_conexao()
+        def _pos():
+            app.adicionar_log_nuvem(f"Teste de conexão: {msg}")
+            if ok:
+                messagebox.showinfo("Teste de Conexão", msg)
+            else:
+                messagebox.showwarning("Falha na Conexão", msg)
+        root.after(0, _pos)
+    threading.Thread(target=_tarefa, daemon=True).start()
+
+def salvar_config_nuvem(url, senha):
+    nuvem_sync.salvar_config(url, senha)
+    messagebox.showinfo("Configurações", "Configurações da nuvem salvas com sucesso!")
+
+def verificar_pedidos_background():
+    """Verifica silenciosamente a cada 3 minutos se chegaram novos pedidos pelo app."""
+    def _tarefa():
+        try:
+            ok, msg, qtd_novos = nuvem_sync.puxar_pedidos_nuvem()
+            if ok and qtd_novos > 0:
+                def _atualizar():
+                    carregar_tudo()
+                    app.adicionar_log_nuvem(f"🔔 {qtd_novos} novos pedidos recebidos automaticamente do aplicativo!")
+                root.after(0, _atualizar)
+        except Exception:
+            pass
+        finally:
+            root.after(180000, verificar_pedidos_background)
+    threading.Thread(target=_tarefa, daemon=True).start()
+
+
 root = tk.Tk()
 root.title("Sistema de Gestão - Renascer Locações")
 root.geometry("1280x750")
@@ -283,13 +394,27 @@ callbacks = {
     "excluir_cliente": excluir_cliente,
     "obter_catalogo": database.buscar_catalogo, 
     "salvar_item_catalogo": salvar_item_catalogo,
+    "salvar_fotos_catalogo": salvar_fotos_catalogo,
     "excluir_item_catalogo": excluir_item_catalogo,
     "gerar_pdf_catalogo": gerar_pdf_catalogo,
     "buscar_todos_pedidos_relatorio": database.buscar_todos_pedidos_relatorio,
     "gerar_impressao_rapida": gerar_impressao_rapida,
-    "gerar_relatorio_entrega": gerar_relatorio_entrega
+    "gerar_relatorio_entrega": gerar_relatorio_entrega,
+    "gerar_pdf_resumo_periodo": gerar_pdf_resumo_periodo,
+    "gerar_pdf_ranking_itens": gerar_pdf_ranking_itens,
+    "gerar_pdf_perdas_semana": gerar_pdf_perdas_semana,
+    "gerar_pdf_projecao_futura": gerar_pdf_projecao_futura,
+    "sincronizar_nuvem": sincronizar_nuvem,
+    "puxar_pedidos_nuvem": puxar_pedidos_nuvem,
+    "enviar_catalogo_nuvem": enviar_catalogo_nuvem,
+    "testar_conexao_nuvem": testar_conexao_nuvem,
+    "salvar_config_nuvem": salvar_config_nuvem
 }
 
 app = FormularioOrcamento(root, callbacks)
 carregar_tudo()
+
+# Inicia checagem automática em segundo plano após 5 segundos
+root.after(5000, verificar_pedidos_background)
+
 root.mainloop()

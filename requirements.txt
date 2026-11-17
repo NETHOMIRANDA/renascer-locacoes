@@ -1,3 +1,6 @@
 reportlab
 flask
 google-generativeai
+supabase
+python-dotenv
+Pillow

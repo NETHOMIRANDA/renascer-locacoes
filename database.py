@@ -36,7 +36,8 @@ def criar_tabelas():
             nome TEXT NOT NULL,
             unidade TEXT DEFAULT 'Unidade',
             preco REAL DEFAULT 0.0,
-            estoque_total INTEGER DEFAULT 0
+            estoque_total INTEGER DEFAULT 0,
+            fotos TEXT DEFAULT '[]'
         )
     """)
 
@@ -53,6 +54,11 @@ def criar_tabelas():
 
     try:
         cursor.execute("ALTER TABLE orcamentos ADD COLUMN observacoes TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE catalogo ADD COLUMN fotos TEXT DEFAULT '[]'")
     except sqlite3.OperationalError:
         pass
 
@@ -281,25 +287,37 @@ def popular_catalogo_inicial():
 def buscar_catalogo():
     conn = conectar()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, categoria, nome, unidade, preco, estoque_total FROM catalogo ORDER BY categoria, nome")
+    cursor.execute("SELECT id, categoria, nome, unidade, preco, estoque_total, fotos FROM catalogo ORDER BY categoria, nome")
     rows = cursor.fetchall()
     conn.close()
     return rows
 
-def salvar_item_catalogo(id_item, categoria, nome, unidade, preco, estoque):
+def salvar_item_catalogo(id_item, categoria, nome, unidade, preco, estoque, fotos=None):
+    import json
     conn = conectar()
     cursor = conn.cursor()
     if id_item:
-        cursor.execute("""
-            UPDATE catalogo
-            SET categoria=?, nome=?, unidade=?, preco=?, estoque_total=?
-            WHERE id=?
-        """, (categoria, nome, unidade, preco, estoque, id_item))
+        if fotos is None:
+            cursor.execute("""
+                UPDATE catalogo
+                SET categoria=?, nome=?, unidade=?, preco=?, estoque_total=?
+                WHERE id=?
+            """, (categoria, nome, unidade, preco, estoque, id_item))
+        else:
+            fotos_json = json.dumps(fotos, ensure_ascii=False)
+            cursor.execute("""
+                UPDATE catalogo
+                SET categoria=?, nome=?, unidade=?, preco=?, estoque_total=?, fotos=?
+                WHERE id=?
+            """, (categoria, nome, unidade, preco, estoque, fotos_json, id_item))
     else:
+        if fotos is None:
+            fotos = []
+        fotos_json = json.dumps(fotos, ensure_ascii=False)
         cursor.execute("""
-            INSERT INTO catalogo (categoria, nome, unidade, preco, estoque_total)
-            VALUES (?, ?, ?, ?, ?)
-        """, (categoria, nome, unidade, preco, estoque))
+            INSERT INTO catalogo (categoria, nome, unidade, preco, estoque_total, fotos)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (categoria, nome, unidade, preco, estoque, fotos_json))
     conn.commit()
     conn.close()
 
@@ -309,6 +327,28 @@ def excluir_item_catalogo(id_item):
     cursor.execute("DELETE FROM catalogo WHERE id=?", (id_item,))
     conn.commit()
     conn.close()
+
+def salvar_fotos_item_catalogo(id_item, fotos):
+    import json
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE catalogo SET fotos=? WHERE id=?", (json.dumps(fotos or [], ensure_ascii=False), id_item))
+    conn.commit()
+    conn.close()
+
+def obter_fotos_item_catalogo(id_item):
+    import json
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("SELECT fotos FROM catalogo WHERE id=?", (id_item,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row or not row[0]:
+        return []
+    try:
+        return json.loads(row[0])
+    except Exception:
+        return []
 
 def inserir_pedido(dados, tipo="Orcamento"):
     conn = conectar()

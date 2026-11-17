@@ -1,9 +1,30 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import re
 import difflib
+import json
+import os
+import shutil
 from datetime import datetime
 import tkinter.font as tkfont
+import webbrowser
+try:
+    from PIL import Image, ImageTk
+    PIL_OK = True
+except Exception:
+    PIL_OK = False
+
+import analises
+
+# Paleta de cores da aplicação (também atribuída localmente em __init__)
+BG_COLOR = "#EEF2F7"        # Fundo da aplicação
+CARD_BG = "#FFFFFF"         # Cartões
+BORDER_COLOR = "#DCE3EC"    # Bordas suaves
+PRIMARY_COLOR = "#0F172A"   # Azul-marinho escuro
+ACCENT_COLOR = "#2563EB"    # Azul de destaque
+TEXT_MAIN = "#0F172A"
+TEXT_MUTED = "#64748B"
+SECONDARY_BTN = "#475569"
 
 
 class ZebraTreeview(ttk.Treeview):
@@ -104,6 +125,9 @@ class FormularioOrcamento:
         self.lista_catalogo_completa = []
         self.lista_entregas_completa = []
         self.checados_entrega = set()
+        self._ranking_atual = None
+        self._perdas_atual = None
+        self._projecao_atual = None
 
         self.style = ttk.Style()
         self.style.theme_use("clam")
@@ -175,7 +199,15 @@ class FormularioOrcamento:
                  "setembro", "outubro", "novembro", "dezembro"]
         agora = datetime.now()
         tk.Label(self.header, text=f"{dias[agora.weekday()].capitalize()}, {agora.day} de {meses[agora.month - 1]} de {agora.year}",
-                 bg=PRIMARY_COLOR, fg="#CBD5E1", font=("Segoe UI", 10)).pack(side=tk.RIGHT, padx=20)
+                 bg=PRIMARY_COLOR, fg="#CBD5E1", font=("Segoe UI", 9)).pack(side=tk.RIGHT, padx=15)
+
+        self.btn_sync_header = tk.Button(
+            self.header, text="🔄 Sincronizar Nuvem", bg=ACCENT_COLOR, fg="white",
+            font=("Segoe UI", 9, "bold"), bd=0, padx=12, pady=4, cursor="hand2",
+            activebackground="#1D4ED8", activeforeground="white",
+            command=self._ao_clicar_sincronizar_topo
+        )
+        self.btn_sync_header.pack(side=tk.RIGHT, padx=(0, 10), pady=12)
 
         self.main_container = tk.Frame(root, bg=BG_COLOR)
         self.main_container.pack(fill="both", expand=True, padx=14, pady=14)
@@ -292,6 +324,9 @@ class FormularioOrcamento:
 
         self.aba_cancelados = tk.Frame(self.notebook, bg=BG_COLOR)
         self.notebook.add(self.aba_cancelados, text="Cancelados")
+
+        self.aba_nuvem = tk.Frame(self.notebook, bg=BG_COLOR)
+        self.notebook.add(self.aba_nuvem, text="🌐 Aplicativo & Nuvem")
 
         # FORMULÁRIO DE CADASTRO
         card_form = tk.Frame(self.aba_cadastro, bg=CARD_BG, bd=1, relief="solid", highlightbackground=BORDER_COLOR, highlightthickness=1)
@@ -538,6 +573,9 @@ class FormularioOrcamento:
         self.btn_excluir_cat = tk.Button(frame_btns_cat, text="Excluir Selecionado", bg="#94A3B8", fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=12, pady=5, cursor="hand2", activebackground="#64748B", activeforeground="white", command=self._ao_excluir_cat)
         self.btn_excluir_cat.pack(side=tk.LEFT, padx=(0, 8))
 
+        self.btn_fotos_cat = tk.Button(frame_btns_cat, text="🖼 Fotos do Item", bg=ACCENT_COLOR, fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=12, pady=5, cursor="hand2", activebackground="#1D4ED8", activeforeground="white", command=self._ao_gerenciar_fotos_cat)
+        self.btn_fotos_cat.pack(side=tk.LEFT, padx=(0, 8))
+
         self.btn_pdf_cat = tk.Button(frame_btns_cat, text="Gerar PDF do Catálogo", bg=ACCENT_COLOR, fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=12, pady=5, cursor="hand2", activebackground="#1D4ED8", activeforeground="white", command=self._ao_gerar_pdf_cat)
         self.btn_pdf_cat.pack(side=tk.RIGHT)
 
@@ -550,13 +588,14 @@ class FormularioOrcamento:
         self.entry_filtro_tabela_cat.pack(side=tk.LEFT, fill="x", expand=True)
         self.entry_filtro_tabela_cat.bind("<KeyRelease>", lambda e: self._aplicar_filtro_tabela_cat())
 
-        self.tabela_catalogo = ZebraTreeview(card_cat, columns=("ID", "Categoria", "Nome", "Unidade", "Preço", "Estoque"), show="headings", height=10)
+        self.tabela_catalogo = ZebraTreeview(card_cat, columns=("ID", "Categoria", "Nome", "Unidade", "Preço", "Estoque", "Fotos"), show="headings", height=10)
         self.tabela_catalogo.heading("ID", text="ID")
         self.tabela_catalogo.heading("Categoria", text="Categoria")
         self.tabela_catalogo.heading("Nome", text="Item / Descrição")
         self.tabela_catalogo.heading("Unidade", text="Unidade")
         self.tabela_catalogo.heading("Preço", text="Preço (R$)")
         self.tabela_catalogo.heading("Estoque", text="Estoque")
+        self.tabela_catalogo.heading("Fotos", text="Fotos")
 
         self.tabela_catalogo.column("ID", width=35, anchor="center")
         self.tabela_catalogo.column("Categoria", width=140)
@@ -564,6 +603,7 @@ class FormularioOrcamento:
         self.tabela_catalogo.column("Unidade", width=70, anchor="center")
         self.tabela_catalogo.column("Preço", width=80, anchor="e")
         self.tabela_catalogo.column("Estoque", width=60, anchor="center")
+        self.tabela_catalogo.column("Fotos", width=50, anchor="center")
         self.tabela_catalogo.pack(fill="both", expand=True, padx=15, pady=(0, 10))
 
         self.tabela_catalogo.bind("<<TreeviewSelect>>", self._ao_selecionar_item_catalogo)
@@ -688,8 +728,14 @@ class FormularioOrcamento:
         tk.Button(frame_linha2_acoes, text="Arquivar", bg=SECONDARY_BTN, fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=8, pady=4, cursor="hand2", activebackground="#334155", activeforeground="white", command=lambda: self.callbacks.get("mover_status")(self.tabela_entregas, 'Arquivado')).pack(side=tk.LEFT, padx=(0, 4))
         tk.Button(frame_linha2_acoes, text="Cancelar", bg="#94A3B8", fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=8, pady=4, cursor="hand2", activebackground="#64748B", activeforeground="white", command=lambda: self.callbacks.get("mover_status")(self.tabela_entregas, 'Cancelado')).pack(side=tk.LEFT)
 
-        # ABA RELATÓRIOS FINANCEIROS
-        card_rel = tk.Frame(self.aba_relatorios, bg=CARD_BG, bd=1, relief="solid", highlightbackground=BORDER_COLOR, highlightthickness=1)
+        # ABA RELATÓRIOS FINANCEIROS (sub-abas: Resumo, Itens, Perdas, Projeção)
+        self.nb_rel = ttk.Notebook(self.aba_relatorios)
+        self.nb_rel.pack(fill="both", expand=True, padx=2, pady=5)
+
+        self.sub_resumo = tk.Frame(self.nb_rel, bg=BG_COLOR)
+        self.nb_rel.add(self.sub_resumo, text="Resumo por Período")
+
+        card_rel = tk.Frame(self.sub_resumo, bg=CARD_BG, bd=1, relief="solid", highlightbackground=BORDER_COLOR, highlightthickness=1)
         card_rel.pack(fill="both", expand=True, padx=2, pady=5)
 
         tk.Label(card_rel, text="Relatórios Financeiros & Métricas de Desempenho", font=("Segoe UI", 10, "bold"), bg=CARD_BG, fg=PRIMARY_COLOR).pack(anchor="w", padx=15, pady=(12, 5))
@@ -698,7 +744,7 @@ class FormularioOrcamento:
         frame_filtros_rel.pack(fill="x", padx=15, pady=5)
 
         tk.Label(frame_filtros_rel, text="Filtrar por:", font=("Segoe UI", 8, "bold"), bg=CARD_BG, fg=TEXT_MUTED).pack(side=tk.LEFT, padx=(0, 5))
-        self.combo_tipo_filtro_rel = ttk.Combobox(frame_filtros_rel, values=["Todos", "Diário", "Mensal", "Anual"], state="readonly", width=10, font=("Segoe UI", 9))
+        self.combo_tipo_filtro_rel = ttk.Combobox(frame_filtros_rel, values=["Todos", "Semanal", "Diário", "Mensal", "Anual"], state="readonly", width=10, font=("Segoe UI", 9))
         self.combo_tipo_filtro_rel.set("Todos")
         self.combo_tipo_filtro_rel.pack(side=tk.LEFT, padx=(0, 10))
         self.combo_tipo_filtro_rel.bind("<<ComboboxSelected>>", self._atualizar_opcoes_filtro_rel)
@@ -709,6 +755,9 @@ class FormularioOrcamento:
 
         btn_aplicar_rel = tk.Button(frame_filtros_rel, text="Calcular / Filtrar", bg=ACCENT_COLOR, fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=10, pady=3, cursor="hand2", activebackground="#1D4ED8", activeforeground="white", command=self.calcular_relatorios_financeiros)
         btn_aplicar_rel.pack(side=tk.LEFT)
+
+        btn_pdf_rel = tk.Button(frame_filtros_rel, text="Relatório PDF", bg=PRIMARY_COLOR, fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=10, pady=3, cursor="hand2", activebackground="#334155", activeforeground="white", command=self._ao_clicar_pdf_resumo)
+        btn_pdf_rel.pack(side=tk.LEFT, padx=(10, 0))
 
         # CARDS MÉTRICAS
         frame_cards_rel = tk.Frame(card_rel, bg=CARD_BG)
@@ -749,6 +798,11 @@ class FormularioOrcamento:
         self.tree_relatorio_financeiro.column("Status", width=90, anchor="center")
         self.tree_relatorio_financeiro.pack(fill="both", expand=True, padx=15, pady=(0, 10))
 
+        # SUB-ABAS NOVAS DO MÓDULO FINANCEIRO
+        self._construir_aba_ranking()
+        self._construir_aba_perdas()
+        self._construir_aba_projecao()
+
         # CANCELADOS
         card_tabela_cancelados = tk.Frame(self.aba_cancelados, bg=CARD_BG, bd=1, relief="solid", highlightbackground=BORDER_COLOR, highlightthickness=1)
         card_tabela_cancelados.pack(fill="both", expand=True, padx=2, pady=5)
@@ -759,6 +813,9 @@ class FormularioOrcamento:
         frame_acoes_cancelados.pack(fill="x", padx=15, pady=10)
         tk.Button(frame_acoes_cancelados, text="Reativar em Orçamentos", bg=PRIMARY_COLOR, fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=12, pady=6, cursor="hand2", activebackground="#334155", activeforeground="white", command=lambda: self.callbacks.get("mover_status")(self.tabela_cancelados, 'Orcamento')).pack(side=tk.LEFT, padx=(0, 10))
         tk.Button(frame_acoes_cancelados, text="Reativar em Entregas", bg=ACCENT_COLOR, fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=12, pady=6, cursor="hand2", activebackground="#1D4ED8", activeforeground="white", command=lambda: self.callbacks.get("mover_status")(self.tabela_cancelados, 'Pedido')).pack(side=tk.LEFT)
+
+        # ABA APLICATIVO & NUVEM
+        self._construir_aba_nuvem()
 
         self._aplicar_tema_moderno()
 
@@ -881,7 +938,10 @@ class FormularioOrcamento:
         tipo = self.combo_tipo_filtro_rel.get()
         self.entry_valor_filtro_rel.delete(0, tk.END)
         hoje = datetime.now()
-        if tipo == "Diário":
+        if tipo == "Semanal":
+            # Qualquer data dentro da semana define a semana de referência
+            self.entry_valor_filtro_rel.insert(0, hoje.strftime("%d/%m/%Y"))
+        elif tipo == "Diário":
             self.entry_valor_filtro_rel.insert(0, hoje.strftime("%d/%m/%Y"))
         elif tipo == "Mensal":
             self.entry_valor_filtro_rel.insert(0, hoje.strftime("%m/%Y"))
@@ -910,7 +970,13 @@ class FormularioOrcamento:
             dt_obj = parse_data_br_ou_iso(ped.get("data_evento", ""))
             
             # Filtro de data
-            if tipo_filtro == "Diário" and valor_filtro:
+            if tipo_filtro == "Semanal" and valor_filtro:
+                dt_filtro = parse_data_br_ou_iso(valor_filtro)
+                if dt_obj == datetime.min or dt_filtro == datetime.min:
+                    continue
+                if dt_obj.isocalendar()[:2] != dt_filtro.isocalendar()[:2]:
+                    continue
+            elif tipo_filtro == "Diário" and valor_filtro:
                 dt_str_br = dt_obj.strftime("%d/%m/%Y")
                 if dt_str_br != valor_filtro and ped.get("data_evento") != valor_filtro:
                     continue
@@ -965,6 +1031,384 @@ class FormularioOrcamento:
         self.card_liquido.lbl_valor.config(text=f"R$ {receita_liquida_acum:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','))
         self.card_ticket.lbl_valor.config(text=f"R$ {ticket_medio:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','))
         self.card_qtd_ped.lbl_valor.config(text=str(qtd_pedidos_validos))
+
+    def _descricao_filtro(self, tipo_filtro, valor_filtro):
+        """Descrição legível do filtro de período ativo."""
+        if tipo_filtro in (None, "", "Todos") or not (valor_filtro or "").strip():
+            return "Todos os períodos"
+        return f"{tipo_filtro}: {valor_filtro.strip()}"
+
+    # ------------------------------------------------------------------
+    # SUB-ABA: ITENS MAIS LOCADOS (RANKING / CARROS-CHEFES)
+    # ------------------------------------------------------------------
+    def _construir_aba_ranking(self):
+        sub = tk.Frame(self.nb_rel, bg=BG_COLOR)
+        self.nb_rel.add(sub, text="Itens Mais Locados")
+
+        card = tk.Frame(sub, bg=CARD_BG, bd=1, relief="solid", highlightbackground=BORDER_COLOR, highlightthickness=1)
+        card.pack(fill="both", expand=True, padx=2, pady=5)
+
+        tk.Label(card, text="Ranking de Itens Mais Locados & Carros-Chefes", font=("Segoe UI", 10, "bold"), bg=CARD_BG, fg=PRIMARY_COLOR).pack(anchor="w", padx=15, pady=(12, 2))
+        tk.Label(card, text="Quantidade e valor dos materiais mais locados, com participação no faturamento.", font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED).pack(anchor="w", padx=15, pady=(0, 5))
+
+        frame_filtros_rank = tk.Frame(card, bg=CARD_BG)
+        frame_filtros_rank.pack(fill="x", padx=15, pady=5)
+
+        tk.Label(frame_filtros_rank, text="Agrupar por:", font=("Segoe UI", 8, "bold"), bg=CARD_BG, fg=TEXT_MUTED).pack(side=tk.LEFT, padx=(0, 5))
+        self.combo_agrupar_rank = ttk.Combobox(frame_filtros_rank, values=["Item", "Categoria de Materiais"], state="readonly", width=19, font=("Segoe UI", 9))
+        self.combo_agrupar_rank.set("Item")
+        self.combo_agrupar_rank.pack(side=tk.LEFT, padx=(0, 10))
+
+        tk.Label(frame_filtros_rank, text="Situação:", font=("Segoe UI", 8, "bold"), bg=CARD_BG, fg=TEXT_MUTED).pack(side=tk.LEFT, padx=(0, 5))
+        self.combo_situacao_rank = ttk.Combobox(frame_filtros_rank, values=["Confirmados", "Todos"], state="readonly", width=11, font=("Segoe UI", 9))
+        self.combo_situacao_rank.set("Confirmados")
+        self.combo_situacao_rank.pack(side=tk.LEFT, padx=(0, 10))
+
+        tk.Label(frame_filtros_rank, text="Filtrar por:", font=("Segoe UI", 8, "bold"), bg=CARD_BG, fg=TEXT_MUTED).pack(side=tk.LEFT, padx=(0, 5))
+        self.combo_periodo_rank = ttk.Combobox(frame_filtros_rank, values=["Todos", "Semanal", "Diário", "Mensal", "Anual"], state="readonly", width=10, font=("Segoe UI", 9))
+        self.combo_periodo_rank.set("Todos")
+        self.combo_periodo_rank.pack(side=tk.LEFT, padx=(0, 10))
+        self.combo_periodo_rank.bind("<<ComboboxSelected>>", self._atualizar_opcoes_filtro_rank)
+
+        tk.Label(frame_filtros_rank, text="Valor:", font=("Segoe UI", 8, "bold"), bg=CARD_BG, fg=TEXT_MUTED).pack(side=tk.LEFT, padx=(0, 5))
+        self.entry_periodo_rank = tk.Entry(frame_filtros_rank, font=("Segoe UI", 9), width=15, bd=1, relief="solid", highlightbackground=BORDER_COLOR)
+        self.entry_periodo_rank.pack(side=tk.LEFT, padx=(0, 10))
+
+        btn_calc_rank = tk.Button(frame_filtros_rank, text="Calcular", bg=ACCENT_COLOR, fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=10, pady=3, cursor="hand2", activebackground="#1D4ED8", activeforeground="white", command=self.calcular_ranking_itens)
+        btn_calc_rank.pack(side=tk.LEFT)
+
+        btn_pdf_rank = tk.Button(frame_filtros_rank, text="Relatório PDF", bg=PRIMARY_COLOR, fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=10, pady=3, cursor="hand2", activebackground="#334155", activeforeground="white", command=self._ao_clicar_pdf_ranking)
+        btn_pdf_rank.pack(side=tk.LEFT, padx=(10, 0))
+
+        # CARDS MÉTRICAS DO RANKING
+        frame_cards_rank = tk.Frame(card, bg=CARD_BG)
+        frame_cards_rank.pack(fill="x", padx=15, pady=10)
+
+        self.card_rank_topo = self._criar_card_metrica(frame_cards_rank, "Carro-Chefe (Mais Locado)", "-", ACCENT_COLOR)
+        self.card_rank_topo.pack(side=tk.LEFT, fill="both", expand=True, padx=4)
+
+        self.card_rank_qtd = self._criar_card_metrica(frame_cards_rank, "Qtd. Total Locada", "0", PRIMARY_COLOR)
+        self.card_rank_qtd.pack(side=tk.LEFT, fill="both", expand=True, padx=4)
+
+        self.card_rank_valor = self._criar_card_metrica(frame_cards_rank, "Valor Total Locado", "R$ 0,00", PRIMARY_COLOR)
+        self.card_rank_valor.pack(side=tk.LEFT, fill="both", expand=True, padx=4)
+
+        self.card_rank_itens = self._criar_card_metrica(frame_cards_rank, "Itens Distintos", "0", PRIMARY_COLOR)
+        self.card_rank_itens.pack(side=tk.LEFT, fill="both", expand=True, padx=4)
+
+        self.tree_ranking = ZebraTreeview(card, columns=("POS", "NOME", "CATEGORIA", "QTD", "VALOR", "PERC"), show="headings", height=9)
+        self.tree_ranking.heading("POS", text="Pos")
+        self.tree_ranking.heading("NOME", text="Material / Item")
+        self.tree_ranking.heading("CATEGORIA", text="Categoria")
+        self.tree_ranking.heading("QTD", text="Qtd. Locada")
+        self.tree_ranking.heading("VALOR", text="Valor Total")
+        self.tree_ranking.heading("PERC", text="% Faturamento")
+
+        self.tree_ranking.column("POS", width=38, anchor="center")
+        self.tree_ranking.column("NOME", width=215)
+        self.tree_ranking.column("CATEGORIA", width=130)
+        self.tree_ranking.column("QTD", width=75, anchor="e")
+        self.tree_ranking.column("VALOR", width=90, anchor="e")
+        self.tree_ranking.column("PERC", width=90, anchor="e")
+        self.tree_ranking.pack(fill="both", expand=True, padx=15, pady=(0, 10))
+
+    def _atualizar_opcoes_filtro_rank(self, event=None):
+        tipo = self.combo_periodo_rank.get()
+        self.entry_periodo_rank.delete(0, tk.END)
+        hoje = datetime.now()
+        if tipo == "Semanal":
+            self.entry_periodo_rank.insert(0, hoje.strftime("%d/%m/%Y"))
+        elif tipo == "Diário":
+            self.entry_periodo_rank.insert(0, hoje.strftime("%d/%m/%Y"))
+        elif tipo == "Mensal":
+            self.entry_periodo_rank.insert(0, hoje.strftime("%m/%Y"))
+        elif tipo == "Anual":
+            self.entry_periodo_rank.insert(0, hoje.strftime("%Y"))
+
+    def calcular_ranking_itens(self):
+        cb = self.callbacks.get("buscar_todos_pedidos_relatorio")
+        if not cb:
+            return
+        pedidos = cb()
+        catalogo = self.callbacks.get("obter_catalogo", lambda: [])()
+
+        tipo_filtro = self.combo_periodo_rank.get()
+        valor_filtro = self.entry_periodo_rank.get().strip()
+        pedidos = analises.filtrar_por_periodo(pedidos, tipo_filtro, valor_filtro)
+
+        agrupar_por = "item" if self.combo_agrupar_rank.get() == "Item" else "categoria"
+        somente_confirmados = (self.combo_situacao_rank.get() == "Confirmados")
+
+        ranking, total_valor, total_qtd = analises.ranking_itens(
+            pedidos, catalogo, agrupar_por, somente_confirmados)
+
+        self._ranking_atual = {
+            "ranking": ranking,
+            "agrupar_por": agrupar_por,
+            "periodo": self._descricao_filtro(tipo_filtro, valor_filtro),
+            "total_valor": total_valor,
+            "total_qtd": total_qtd,
+        }
+
+        for item in self.tree_ranking.get_children():
+            self.tree_ranking.delete(item)
+
+        for pos, r in enumerate(ranking, start=1):
+            self.tree_ranking.insert("", tk.END, values=(
+                pos,
+                r["nome"],
+                r["categoria"] or "-",
+                f"{r['qtd']:,}".replace(",", "."),
+                analises.moeda(r["valor"]),
+                f"{r['percentual']:.1f}%"
+            ))
+
+        topo = ranking[0]["nome"] if ranking else "-"
+        if len(topo) > 42:
+            topo = topo[:39] + "..."
+        self.card_rank_topo.lbl_valor.config(text=topo)
+        self.card_rank_qtd.lbl_valor.config(text=f"{total_qtd:,}".replace(",", "."))
+        self.card_rank_valor.lbl_valor.config(text=analises.moeda(total_valor))
+        self.card_rank_itens.lbl_valor.config(text=str(len(ranking)))
+
+    def _ao_clicar_pdf_ranking(self):
+        if self._ranking_atual is None:
+            self.calcular_ranking_itens()
+        if self._ranking_atual is None:
+            return
+        cb = self.callbacks.get("gerar_pdf_ranking_itens")
+        if cb:
+            cb(self._ranking_atual["ranking"],
+               self._ranking_atual["agrupar_por"],
+               self._ranking_atual["periodo"])
+
+    # ------------------------------------------------------------------
+    # SUB-ABA: PERDAS POR SEMANA (PEDIDOS NÃO EFETIVADOS)
+    # ------------------------------------------------------------------
+    def _construir_aba_perdas(self):
+        sub = tk.Frame(self.nb_rel, bg=BG_COLOR)
+        self.nb_rel.add(sub, text="Perdas por Semana")
+
+        card = tk.Frame(sub, bg=CARD_BG, bd=1, relief="solid", highlightbackground=BORDER_COLOR, highlightthickness=1)
+        card.pack(fill="both", expand=True, padx=2, pady=5)
+
+        tk.Label(card, text="Perdas Semanais — Pedidos Não Efetivados", font=("Segoe UI", 10, "bold"), bg=CARD_BG, fg=PRIMARY_COLOR).pack(anchor="w", padx=15, pady=(12, 2))
+        tk.Label(card, text="Pedidos com evento na semana de referência que permaneceram como orçamento (não convertido) ou foram cancelados.", font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED).pack(anchor="w", padx=15, pady=(0, 5))
+
+        frame_filtros_perdas = tk.Frame(card, bg=CARD_BG)
+        frame_filtros_perdas.pack(fill="x", padx=15, pady=5)
+
+        tk.Label(frame_filtros_perdas, text="Semana de referência (dd/mm/aaaa):", font=("Segoe UI", 8, "bold"), bg=CARD_BG, fg=TEXT_MUTED).pack(side=tk.LEFT, padx=(0, 5))
+        self.entry_semana_perdas = tk.Entry(frame_filtros_perdas, font=("Segoe UI", 9), width=15, bd=1, relief="solid", highlightbackground=BORDER_COLOR)
+        self.entry_semana_perdas.pack(side=tk.LEFT, padx=(0, 10))
+        self.entry_semana_perdas.insert(0, datetime.now().strftime("%d/%m/%Y"))
+
+        btn_semana_atual = tk.Button(frame_filtros_perdas, text="Semana Atual", bg=SECONDARY_BTN, fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=10, pady=3, cursor="hand2", activebackground="#334155", activeforeground="white", command=self._usar_semana_atual_perdas)
+        btn_semana_atual.pack(side=tk.LEFT, padx=(0, 10))
+
+        btn_calc_perdas = tk.Button(frame_filtros_perdas, text="Calcular Perdas", bg=ACCENT_COLOR, fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=10, pady=3, cursor="hand2", activebackground="#1D4ED8", activeforeground="white", command=self.calcular_perdas_semana)
+        btn_calc_perdas.pack(side=tk.LEFT)
+
+        btn_pdf_perdas = tk.Button(frame_filtros_perdas, text="Relatório PDF", bg=PRIMARY_COLOR, fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=10, pady=3, cursor="hand2", activebackground="#334155", activeforeground="white", command=self._ao_clicar_pdf_perdas)
+        btn_pdf_perdas.pack(side=tk.LEFT, padx=(10, 0))
+
+        # CARDS MÉTRICAS DE PERDAS
+        frame_cards_perdas = tk.Frame(card, bg=CARD_BG)
+        frame_cards_perdas.pack(fill="x", padx=15, pady=10)
+
+        self.card_perdas_qtd = self._criar_card_metrica(frame_cards_perdas, "Pedidos Não Efetivados", "0", "#DC2626")
+        self.card_perdas_qtd.pack(side=tk.LEFT, fill="both", expand=True, padx=4)
+
+        self.card_perdas_valor = self._criar_card_metrica(frame_cards_perdas, "Valor Perdido (Bruto)", "R$ 0,00", "#DC2626")
+        self.card_perdas_valor.pack(side=tk.LEFT, fill="both", expand=True, padx=4)
+
+        self.card_perdas_efet = self._criar_card_metrica(frame_cards_perdas, "Pedidos Efetivados", "0", PRIMARY_COLOR)
+        self.card_perdas_efet.pack(side=tk.LEFT, fill="both", expand=True, padx=4)
+
+        self.card_perdas_taxa = self._criar_card_metrica(frame_cards_perdas, "Taxa de Perda", "0,0%", "#DC2626")
+        self.card_perdas_taxa.pack(side=tk.LEFT, fill="both", expand=True, padx=4)
+
+        self.tree_perdas = ZebraTreeview(card, columns=("ID", "CLIENTE", "DATA", "QTD", "VALOR", "SITUACAO"), show="headings", height=9)
+        self.tree_perdas.heading("ID", text="ID")
+        self.tree_perdas.heading("CLIENTE", text="Cliente")
+        self.tree_perdas.heading("DATA", text="Data Evento")
+        self.tree_perdas.heading("QTD", text="Qtd. Itens")
+        self.tree_perdas.heading("VALOR", text="Valor Bruto")
+        self.tree_perdas.heading("SITUACAO", text="Situação")
+
+        self.tree_perdas.column("ID", width=40, anchor="center")
+        self.tree_perdas.column("CLIENTE", width=185)
+        self.tree_perdas.column("DATA", width=90, anchor="center")
+        self.tree_perdas.column("QTD", width=70, anchor="e")
+        self.tree_perdas.column("VALOR", width=95, anchor="e")
+        self.tree_perdas.column("SITUACAO", width=150)
+        self.tree_perdas.pack(fill="both", expand=True, padx=15, pady=(0, 10))
+
+    def _usar_semana_atual_perdas(self):
+        self.entry_semana_perdas.delete(0, tk.END)
+        self.entry_semana_perdas.insert(0, datetime.now().strftime("%d/%m/%Y"))
+
+    def calcular_perdas_semana(self):
+        cb = self.callbacks.get("buscar_todos_pedidos_relatorio")
+        if not cb:
+            return
+        pedidos = cb()
+        catalogo = self.callbacks.get("obter_catalogo", lambda: [])()
+
+        resultado = analises.perdas_semana(pedidos, catalogo, self.entry_semana_perdas.get().strip())
+        self._perdas_atual = resultado
+
+        if resultado is None:
+            messagebox.showwarning("Aviso", "Informe uma data válida (dd/mm/aaaa) para definir a semana de referência.")
+            return
+
+        for item in self.tree_perdas.get_children():
+            self.tree_perdas.delete(item)
+
+        for p in resultado["perdidos"]:
+            self.tree_perdas.insert("", tk.END, values=(
+                f"#{p['id']}",
+                p["cliente"] or "-",
+                p["data_evento"] or "-",
+                p["qtd_itens"],
+                analises.moeda(p["bruto"]),
+                p["situacao"]
+            ))
+
+        self.card_perdas_qtd.lbl_valor.config(text=str(resultado["qtd_perdidos"]))
+        self.card_perdas_valor.lbl_valor.config(text=analises.moeda(resultado["valor_perdido"]))
+        self.card_perdas_efet.lbl_valor.config(text=str(resultado["qtd_efetivados"]))
+        self.card_perdas_taxa.lbl_valor.config(text=f"{resultado['taxa_perda']:.1f}%".replace('.', ','))
+
+    def _ao_clicar_pdf_perdas(self):
+        if self._perdas_atual is None:
+            self.calcular_perdas_semana()
+        if self._perdas_atual is None:
+            return
+        cb = self.callbacks.get("gerar_pdf_perdas_semana")
+        if cb:
+            cb(self._perdas_atual)
+
+    # ------------------------------------------------------------------
+    # SUB-ABA: PROJEÇÃO FUTURA (SEMANAS / MESES / ANOS)
+    # ------------------------------------------------------------------
+    def _construir_aba_projecao(self):
+        sub = tk.Frame(self.nb_rel, bg=BG_COLOR)
+        self.nb_rel.add(sub, text="Projeção Futura")
+
+        card = tk.Frame(sub, bg=CARD_BG, bd=1, relief="solid", highlightbackground=BORDER_COLOR, highlightthickness=1)
+        card.pack(fill="both", expand=True, padx=2, pady=5)
+
+        tk.Label(card, text="Projeção Futura de Receita — Semanas, Meses e Anos", font=("Segoe UI", 10, "bold"), bg=CARD_BG, fg=PRIMARY_COLOR).pack(anchor="w", padx=15, pady=(12, 2))
+        tk.Label(card, text="Projeção dinâmica calculada automaticamente a partir da média de movimento recente (últimas 8 semanas, últimos 12 meses e últimos 5 anos).", font=("Segoe UI", 8), bg=CARD_BG, fg=TEXT_MUTED).pack(anchor="w", padx=15, pady=(0, 5))
+
+        frame_filtros_proj = tk.Frame(card, bg=CARD_BG)
+        frame_filtros_proj.pack(fill="x", padx=15, pady=5)
+
+        btn_calc_proj = tk.Button(frame_filtros_proj, text="Calcular Projeção", bg=ACCENT_COLOR, fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=10, pady=3, cursor="hand2", activebackground="#1D4ED8", activeforeground="white", command=self.calcular_projecao_futura)
+        btn_calc_proj.pack(side=tk.LEFT)
+
+        btn_pdf_proj = tk.Button(frame_filtros_proj, text="Relatório PDF", bg=PRIMARY_COLOR, fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=10, pady=3, cursor="hand2", activebackground="#334155", activeforeground="white", command=self._ao_clicar_pdf_projecao)
+        btn_pdf_proj.pack(side=tk.LEFT, padx=(10, 0))
+
+        # CARDS MÉTRICAS DA PROJEÇÃO
+        frame_cards_proj = tk.Frame(card, bg=CARD_BG)
+        frame_cards_proj.pack(fill="x", padx=15, pady=10)
+
+        self.card_proj_semana = self._criar_card_metrica(frame_cards_proj, "Média / Projeção Semanal", "R$ 0,00", PRIMARY_COLOR)
+        self.card_proj_semana.pack(side=tk.LEFT, fill="both", expand=True, padx=4)
+
+        self.card_proj_mes = self._criar_card_metrica(frame_cards_proj, "Média / Projeção Mensal", "R$ 0,00", PRIMARY_COLOR)
+        self.card_proj_mes.pack(side=tk.LEFT, fill="both", expand=True, padx=4)
+
+        self.card_proj_ano = self._criar_card_metrica(frame_cards_proj, "Média / Projeção Anual", "R$ 0,00", PRIMARY_COLOR)
+        self.card_proj_ano.pack(side=tk.LEFT, fill="both", expand=True, padx=4)
+
+        self.card_proj_total = self._criar_card_metrica(frame_cards_proj, "Receita Acumulada (Histórico)", "R$ 0,00", ACCENT_COLOR)
+        self.card_proj_total.pack(side=tk.LEFT, fill="both", expand=True, padx=4)
+
+        self.tree_projecao = ZebraTreeview(card, columns=("TIPO", "PERIODO", "PEDIDOS", "RECEITA", "TICKET"), show="headings", height=10)
+        self.tree_projecao.heading("TIPO", text="Tipo")
+        self.tree_projecao.heading("PERIODO", text="Período Projetado")
+        self.tree_projecao.heading("PEDIDOS", text="Pedidos Proj.")
+        self.tree_projecao.heading("RECEITA", text="Receita Projetada")
+        self.tree_projecao.heading("TICKET", text="Ticket Méd. Proj.")
+
+        self.tree_projecao.column("TIPO", width=70, anchor="center")
+        self.tree_projecao.column("PERIODO", width=230)
+        self.tree_projecao.column("PEDIDOS", width=90, anchor="e")
+        self.tree_projecao.column("RECEITA", width=110, anchor="e")
+        self.tree_projecao.column("TICKET", width=110, anchor="e")
+        self.tree_projecao.pack(fill="both", expand=True, padx=15, pady=(0, 10))
+
+    def calcular_projecao_futura(self):
+        cb = self.callbacks.get("buscar_todos_pedidos_relatorio")
+        if not cb:
+            return
+        pedidos = cb()
+        catalogo = self.callbacks.get("obter_catalogo", lambda: [])()
+
+        proj = analises.projecao_futura(pedidos, catalogo)
+        self._projecao_atual = proj
+
+        for item in self.tree_projecao.get_children():
+            self.tree_projecao.delete(item)
+
+        for s in proj["semanas"]:
+            self.tree_projecao.insert("", tk.END, values=(
+                "Semana", s["periodo"],
+                f"{s['pedidos']:.1f}".replace('.', ','),
+                analises.moeda(s["receita"]),
+                analises.moeda(s["ticket"])
+            ))
+        for m in proj["meses"]:
+            self.tree_projecao.insert("", tk.END, values=(
+                "Mês", m["periodo"],
+                f"{m['pedidos']:.1f}".replace('.', ','),
+                analises.moeda(m["receita"]),
+                analises.moeda(m["ticket"])
+            ))
+        for a in proj["anos"]:
+            self.tree_projecao.insert("", tk.END, values=(
+                "Ano", a["periodo"],
+                f"{a['pedidos']:.1f}".replace('.', ','),
+                analises.moeda(a["receita"]),
+                analises.moeda(a["ticket"])
+            ))
+
+        self.card_proj_semana.lbl_valor.config(text=analises.moeda(proj["media_semana_rec"]))
+        self.card_proj_mes.lbl_valor.config(text=analises.moeda(proj["media_mes_rec"]))
+        self.card_proj_ano.lbl_valor.config(text=analises.moeda(proj["media_ano_rec"]))
+        self.card_proj_total.lbl_valor.config(text=analises.moeda(proj["total_receita"]))
+
+    def _ao_clicar_pdf_projecao(self):
+        if self._projecao_atual is None:
+            self.calcular_projecao_futura()
+        if self._projecao_atual is None:
+            return
+        cb = self.callbacks.get("gerar_pdf_projecao_futura")
+        if cb:
+            cb(self._projecao_atual)
+
+    def _ao_clicar_pdf_resumo(self):
+        cb = self.callbacks.get("buscar_todos_pedidos_relatorio")
+        if not cb:
+            return
+        pedidos = cb()
+        catalogo = self.callbacks.get("obter_catalogo", lambda: [])()
+
+        tipo_filtro = self.combo_tipo_filtro_rel.get()
+        valor_filtro = self.entry_valor_filtro_rel.get().strip()
+        pedidos_filtrados = analises.filtrar_por_periodo(pedidos, tipo_filtro, valor_filtro)
+
+        agregados_semana = analises.agregar_por_periodo(pedidos_filtrados, catalogo, "semana")
+        agregados_mes = analises.agregar_por_periodo(pedidos_filtrados, catalogo, "mes")
+        agregados_ano = analises.agregar_por_periodo(pedidos_filtrados, catalogo, "ano")
+
+        cb_pdf = self.callbacks.get("gerar_pdf_resumo_periodo")
+        if cb_pdf:
+            cb_pdf(agregados_semana, agregados_mes, agregados_ano,
+                   self._descricao_filtro(tipo_filtro, valor_filtro))
 
     # ------------------------------------------------------------------
     # ABA CLIENTES (cadastro)
@@ -1253,6 +1697,212 @@ class FormularioOrcamento:
         if cb and self.id_item_cat_em_edicao:
             cb(self.id_item_cat_em_edicao)
 
+    def _fotos_dir(self):
+        base = os.path.dirname(os.path.abspath(__file__))
+        d = os.path.join(base, "fotos_catalogo")
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception:
+            pass
+        return d
+
+    def _row_catalogo_por_id(self, id_item):
+        for row in self.lista_catalogo_completa:
+            if str(row[0]) == str(id_item):
+                return row
+        return None
+
+    def _fotos_item_por_id(self, id_item):
+        row = self._row_catalogo_por_id(id_item)
+        if not row:
+            return []
+        raw = row[6] if len(row) > 6 else None
+        if not raw:
+            return []
+        if isinstance(raw, (list, tuple)):
+            return list(raw)
+        try:
+            return json.loads(raw)
+        except Exception:
+            return []
+
+    def _caminho_foto(self, nome):
+        if not nome:
+            return ""
+        if os.path.isabs(nome) or os.path.exists(nome):
+            return nome
+        return os.path.join(self._fotos_dir(), nome)
+
+    def _abrir_gerenciador_fotos(self, id_item, nome_item, fotos_iniciais):
+        fotos = list(fotos_iniciais or [])
+        win = tk.Toplevel(self.root)
+        win.title(f"Fotos do Item — {nome_item}")
+        win.geometry("720x520")
+        win.configure(bg=self.BG_COLOR)
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(win, text=f"Gerenciar fotos: {nome_item}", font=("Segoe UI", 11, "bold"), bg=self.BG_COLOR, fg=self.PRIMARY_COLOR).pack(anchor="w", padx=15, pady=(12, 4))
+        tk.Label(win, text="Quantidade livre: adicione quantas quiser. Clique em uma foto para ampliar.", font=("Segoe UI", 9), bg=self.BG_COLOR, fg=self.TEXT_MUTED).pack(anchor="w", padx=15, pady=(0, 8))
+
+        container = tk.Frame(win, bg=self.CARD_BG, bd=1, relief="solid", highlightbackground=self.BORDER_COLOR, highlightthickness=1)
+        container.pack(fill="both", expand=True, padx=15, pady=5)
+
+        canvas = tk.Canvas(container, bg=self.CARD_BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=self.CARD_BG)
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill="both", expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill="y")
+
+        status_lbl = tk.Label(win, text=f"{len(fotos)} foto(s)", font=("Segoe UI", 9, "bold"), bg=self.BG_COLOR, fg=self.TEXT_MUTED)
+        status_lbl.pack(anchor="w", padx=15, pady=(4, 4))
+
+        def atualizar_status():
+            status_lbl.config(text=f"{len(fotos)} foto(s)")
+
+        def render_grid():
+            for w in inner.winfo_children():
+                w.destroy()
+            if not fotos:
+                tk.Label(inner, text="Nenhuma foto. Clique em 'Adicionar Fotos'.", font=("Segoe UI", 9, "italic"), bg=self.CARD_BG, fg=self.TEXT_MUTED).grid(row=0, column=0, padx=10, pady=10)
+                atualizar_status()
+                return
+            cols = 4
+            for idx, nome in enumerate(fotos):
+                r = idx // cols
+                c = idx % cols
+                cell = tk.Frame(inner, bg=self.CARD_BG, bd=1, relief="solid", highlightbackground=self.BORDER_COLOR, highlightthickness=1)
+                cell.grid(row=r, column=c, padx=6, pady=6)
+                # thumbnail
+                thumb = None
+                if PIL_OK:
+                    try:
+                        img = Image.open(self._caminho_foto(nome))
+                        img.thumbnail((120, 120))
+                        thumb = ImageTk.PhotoImage(img)
+                    except Exception:
+                        thumb = None
+                if thumb is not None:
+                    lbl = tk.Label(cell, image=thumb, bg=self.CARD_BG, cursor="hand2")
+                    lbl.image = thumb
+                    lbl.pack(padx=4, pady=4)
+                    lbl.bind("<Button-1>", lambda e, i=idx: self._abrir_lightbox(fotos, i))
+                else:
+                    tk.Label(cell, text=os.path.basename(nome), font=("Segoe UI", 8), bg=self.CARD_BG, fg=self.TEXT_MAIN, wraplength=110).pack(padx=4, pady=4)
+                # botão remover
+                btn_rem = tk.Button(cell, text="✕", bg="#94A3B8", fg="white", font=("Segoe UI", 8, "bold"), bd=0, padx=6, pady=2, cursor="hand2",
+                                    command=lambda n=nome: remover_foto(n))
+                btn_rem.pack(pady=(0, 4))
+            atualizar_status()
+
+        def remover_foto(nome):
+            if nome in fotos:
+                fotos.remove(nome)
+            render_grid()
+
+        def adicionar_fotos():
+            caminhos = filedialog.askopenfilenames(
+                title="Selecionar fotos",
+                filetypes=[("Imagens", "*.jpg *.jpeg *.png *.gif *.bmp *.webp"), ("Todos", "*.*")]
+            )
+            if not caminhos:
+                return
+            pasta = self._fotos_dir()
+            for i, cam in enumerate(caminhos):
+                try:
+                    base = os.path.basename(cam)
+                    nome_dest = f"{id_item}_{int(datetime.now().timestamp()*1000)}_{i}_{base}"
+                    dest = os.path.join(pasta, nome_dest)
+                    shutil.copy2(cam, dest)
+                    fotos.append(nome_dest)
+                except Exception as e:
+                    messagebox.showerror("Erro", f"Não foi possível copiar {cam}:\n{e}")
+            render_grid()
+
+        def salvar():
+            cb = self.callbacks.get("salvar_fotos_catalogo")
+            if cb:
+                cb(id_item, list(fotos))
+            win.destroy()
+
+        frame_btns = tk.Frame(win, bg=self.BG_COLOR)
+        frame_btns.pack(fill="x", padx=15, pady=10)
+        tk.Button(frame_btns, text="➕ Adicionar Fotos", bg=PRIMARY_COLOR, fg="white", font=("Segoe UI", 9, "bold"), bd=0, padx=12, pady=6, cursor="hand2", command=adicionar_fotos).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Button(frame_btns, text="💾 Salvar", bg=ACCENT_COLOR, fg="white", font=("Segoe UI", 9, "bold"), bd=0, padx=12, pady=6, cursor="hand2", command=salvar).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Button(frame_btns, text="Fechar", bg=SECONDARY_BTN, fg="white", font=("Segoe UI", 9, "bold"), bd=0, padx=12, pady=6, cursor="hand2", command=win.destroy).pack(side=tk.RIGHT)
+
+        render_grid()
+
+    def _abrir_lightbox(self, fotos, indice_inicial=0):
+        if not fotos:
+            return
+        idx = [indice_inicial]
+
+        win = tk.Toplevel(self.root)
+        win.title("Visualizar Fotos")
+        win.geometry("900x640")
+        win.configure(bg="#0F172A")
+        win.transient(self.root)
+
+        lbl_contador = tk.Label(win, text="", font=("Segoe UI", 10, "bold"), bg="#0F172A", fg="white")
+        lbl_contador.pack(pady=(10, 4))
+
+        lbl_img = tk.Label(win, bg="#0F172A")
+        lbl_img.pack(fill="both", expand=True, padx=20, pady=10)
+
+        frame_nav = tk.Frame(win, bg="#0F172A")
+        frame_nav.pack(fill="x", pady=10)
+
+        def mostrar():
+            nome = fotos[idx[0]]
+            if PIL_OK:
+                try:
+                    img = Image.open(self._caminho_foto(nome))
+                    # redimensionar para caber
+                    win.update_idletasks()
+                    maxw = max(400, win.winfo_width() - 60)
+                    maxh = max(300, win.winfo_height() - 120)
+                    img.thumbnail((maxw, maxh))
+                    photo = ImageTk.PhotoImage(img)
+                    lbl_img.config(image=photo)
+                    lbl_img.image = photo
+                except Exception as e:
+                    lbl_img.config(text=f"Não foi possível carregar: {nome}", fg="white", image="")
+            else:
+                lbl_img.config(text=nome, fg="white")
+            lbl_contador.config(text=f"Foto {idx[0]+1} de {len(fotos)} — {os.path.basename(nome)}")
+
+        def anterior():
+            idx[0] = (idx[0] - 1) % len(fotos)
+            mostrar()
+
+        def proximo():
+            idx[0] = (idx[0] + 1) % len(fotos)
+            mostrar()
+
+        tk.Button(frame_nav, text="◀ Anterior", bg="#475569", fg="white", font=("Segoe UI", 9, "bold"), bd=0, padx=12, pady=6, cursor="hand2", command=anterior).pack(side=tk.LEFT, padx=(20, 8))
+        tk.Button(frame_nav, text="Fechar", bg="#94A3B8", fg="white", font=("Segoe UI", 9, "bold"), bd=0, padx=12, pady=6, cursor="hand2", command=win.destroy).pack(side=tk.LEFT, padx=8)
+        tk.Button(frame_nav, text="Próxima ▶", bg="#475569", fg="white", font=("Segoe UI", 9, "bold"), bd=0, padx=12, pady=6, cursor="hand2", command=proximo).pack(side=tk.RIGHT, padx=(8, 20))
+
+        win.bind("<Left>", lambda e: anterior())
+        win.bind("<Right>", lambda e: proximo())
+        win.bind("<Escape>", lambda e: win.destroy())
+
+        mostrar()
+
+    def _ao_gerenciar_fotos_cat(self):
+        if not self.id_item_cat_em_edicao:
+            messagebox.showwarning("Aviso", "Selecione um item do catálogo primeiro (clique na linha da tabela).")
+            return
+        id_item = self.id_item_cat_em_edicao
+        row = self._row_catalogo_por_id(id_item)
+        nome_item = row[2] if row else f"Item {id_item}"
+        fotos = self._fotos_item_por_id(id_item)
+        self._abrir_gerenciador_fotos(id_item, nome_item, fotos)
+
     def _ao_gerar_pdf_cat(self):
         cb = self.callbacks.get("gerar_pdf_catalogo")
         if cb:
@@ -1274,7 +1924,17 @@ class FormularioOrcamento:
 
             if not termo or termo in cat or termo in nome:
                 preco_fmt = f"R$ {row[4]:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ',')
-                self.tabela_catalogo.insert("", tk.END, values=(row[0], row[1], row[2], row[3], preco_fmt, row[5]))
+                qtd_fotos = 0
+                try:
+                    raw = row[6] if len(row) > 6 else None
+                    if raw:
+                        if isinstance(raw, (list, tuple)):
+                            qtd_fotos = len(raw)
+                        else:
+                            qtd_fotos = len(json.loads(raw))
+                except Exception:
+                    qtd_fotos = 0
+                self.tabela_catalogo.insert("", tk.END, values=(row[0], row[1], row[2], row[3], preco_fmt, row[5], qtd_fotos))
 
     def ao_selecionar_pedido(self, event, tabela):
         self.root.after(30, lambda: self._carregar_preview_tabela(tabela))
@@ -1667,3 +2327,168 @@ class FormularioOrcamento:
         cb = self.callbacks.get("gerar_relatorio_entrega")
         if cb:
             cb(ids_visiveis)
+
+    # ------------------------------------------------------------------
+    # ABA APLICATIVO & NUVEM
+    # ------------------------------------------------------------------
+    def _construir_aba_nuvem(self):
+        card_nuvem = tk.Frame(self.aba_nuvem, bg=self.CARD_BG, bd=1, relief="solid", highlightbackground=self.BORDER_COLOR, highlightthickness=1)
+        card_nuvem.pack(fill="both", expand=True, padx=2, pady=5)
+
+        # Cabeçalho do Card
+        frame_topo_nuvem = tk.Frame(card_nuvem, bg=self.CARD_BG)
+        frame_topo_nuvem.pack(fill="x", padx=15, pady=(12, 5))
+
+        tk.Label(frame_topo_nuvem, text="🌐 Integração em Nuvem — Aplicativo & Planilha Google", font=("Segoe UI", 11, "bold"), bg=self.CARD_BG, fg=self.PRIMARY_COLOR).pack(anchor="w")
+        tk.Label(frame_topo_nuvem, text="Sincronize pedidos do celular, envie o catálogo atualizado e controle seu aplicativo.", font=("Segoe UI", 8), bg=self.CARD_BG, fg=self.TEXT_MUTED).pack(anchor="w")
+
+        ttk.Separator(card_nuvem, orient="horizontal").pack(fill="x", padx=15, pady=6)
+
+        # Bloco Principal dividido em 2 colunas
+        frame_conteudo_nuvem = tk.Frame(card_nuvem, bg=self.CARD_BG)
+        frame_conteudo_nuvem.pack(fill="both", expand=True, padx=15, pady=5)
+
+        col_esq = tk.Frame(frame_conteudo_nuvem, bg=self.CARD_BG)
+        col_esq.pack(side=tk.LEFT, fill="both", expand=True, padx=(0, 10))
+
+        col_dir = tk.Frame(frame_conteudo_nuvem, bg=self.CARD_BG)
+        col_dir.pack(side=tk.RIGHT, fill="both", expand=True, padx=(10, 0))
+
+        # Coluna Esquerda: Ações de Sincronização
+        tk.Label(col_esq, text="Ações de Sincronização", font=("Segoe UI", 9, "bold"), bg=self.CARD_BG, fg=self.PRIMARY_COLOR).pack(anchor="w", pady=(0, 6))
+
+        frame_botoes_acao_nuvem = tk.Frame(col_esq, bg=self.CARD_BG)
+        frame_botoes_acao_nuvem.pack(fill="x", pady=2)
+
+        btn_sync_tudo = tk.Button(
+            frame_botoes_acao_nuvem, text="🔄 Sincronização Completa (Tudo)", bg=self.ACCENT_COLOR, fg="white",
+            font=("Segoe UI", 9, "bold"), bd=0, padx=12, pady=7, cursor="hand2",
+            activebackground="#1D4ED8", activeforeground="white",
+            command=self._ao_clicar_sincronizar_tudo
+        )
+        btn_sync_tudo.pack(fill="x", pady=(0, 6))
+
+        frame_linha_dupla = tk.Frame(frame_botoes_acao_nuvem, bg=self.CARD_BG)
+        frame_linha_dupla.pack(fill="x", pady=(0, 6))
+
+        btn_puxar_pedidos = tk.Button(
+            frame_linha_dupla, text="📥 Puxar Pedidos do App", bg=self.PRIMARY_COLOR, fg="white",
+            font=("Segoe UI", 8, "bold"), bd=0, padx=8, pady=6, cursor="hand2",
+            activebackground="#334155", activeforeground="white",
+            command=self._ao_clicar_puxar_pedidos
+        )
+        btn_puxar_pedidos.pack(side=tk.LEFT, fill="x", expand=True, padx=(0, 4))
+
+        btn_enviar_catalogo = tk.Button(
+            frame_linha_dupla, text="📤 Enviar Catálogo ao App", bg=self.PRIMARY_COLOR, fg="white",
+            font=("Segoe UI", 8, "bold"), bd=0, padx=8, pady=6, cursor="hand2",
+            activebackground="#334155", activeforeground="white",
+            command=self._ao_clicar_enviar_catalogo
+        )
+        btn_enviar_catalogo.pack(side=tk.RIGHT, fill="x", expand=True, padx=(4, 0))
+
+        btn_testar_conexao = tk.Button(
+            frame_botoes_acao_nuvem, text="⚡ Testar Conexão com a Nuvem", bg="#F1F5F9", fg=self.PRIMARY_COLOR,
+            font=("Segoe UI", 8, "bold"), bd=1, relief="solid", highlightbackground=self.BORDER_COLOR,
+            padx=10, pady=5, cursor="hand2", command=self._ao_clicar_testar_conexao
+        )
+        btn_testar_conexao.pack(fill="x", pady=(0, 10))
+
+        # Links Rápidos
+        tk.Label(col_esq, text="Links do Sistema na Web", font=("Segoe UI", 9, "bold"), bg=self.CARD_BG, fg=self.PRIMARY_COLOR).pack(anchor="w", pady=(6, 4))
+
+        frame_links = tk.Frame(col_esq, bg="#F8FAFC", bd=1, relief="solid", highlightbackground=self.BORDER_COLOR)
+        frame_links.pack(fill="x", pady=2, ipady=4)
+
+        btn_link_app = tk.Button(
+            frame_links, text="📱 Abrir Aplicativo do Cliente (Web / Celular)", bg="#F8FAFC", fg=self.ACCENT_COLOR,
+            font=("Segoe UI", 8, "bold"), bd=0, anchor="w", padx=10, pady=4, cursor="hand2",
+            command=lambda: webbrowser.open("https://nethomiranda.github.io/Aplicativo-Renascer/")
+        )
+        btn_link_app.pack(fill="x")
+
+        btn_link_admin = tk.Button(
+            frame_links, text="🔐 Abrir Painel de Administração Web", bg="#F8FAFC", fg=self.PRIMARY_COLOR,
+            font=("Segoe UI", 8, "bold"), bd=0, anchor="w", padx=10, pady=4, cursor="hand2",
+            command=lambda: webbrowser.open("https://nethomiranda.github.io/Aplicativo-Renascer/admin.html")
+        )
+        btn_link_admin.pack(fill="x")
+
+        btn_link_sheets = tk.Button(
+            frame_links, text="📊 Abrir Planilha no Google Drive", bg="#F8FAFC", fg="#0D904F",
+            font=("Segoe UI", 8, "bold"), bd=0, anchor="w", padx=10, pady=4, cursor="hand2",
+            command=lambda: webbrowser.open("https://docs.google.com/spreadsheets/d/1Ckb0mGm-1hwR0yxEjidK7O-bR5_s19_Y-xQGHJd8nwo/edit")
+        )
+        btn_link_sheets.pack(fill="x")
+
+        # Coluna Direita: Log de Eventos e Configurações
+        tk.Label(col_dir, text="Histórico / Log de Sincronizações", font=("Segoe UI", 9, "bold"), bg=self.CARD_BG, fg=self.PRIMARY_COLOR).pack(anchor="w", pady=(0, 4))
+
+        self.text_log_nuvem = tk.Text(col_dir, height=8, font=("Consolas", 8), bg="#0F172A", fg="#E2E8F0", bd=0, padx=8, pady=6)
+        self.text_log_nuvem.pack(fill="both", expand=True, pady=(0, 8))
+        self.adicionar_log_nuvem("Sistema iniciado. Pronto para sincronizar.")
+
+        # Configurações da Conexão
+        frame_config_box = tk.Frame(col_dir, bg="#F1F5F9", bd=1, relief="solid", highlightbackground=self.BORDER_COLOR)
+        frame_config_box.pack(fill="x", pady=2, padx=2)
+
+        tk.Label(frame_config_box, text="Endereço da Ponte Google Apps Script (/exec):", font=("Segoe UI", 8, "bold"), bg="#F1F5F9", fg=self.TEXT_MUTED).pack(anchor="w", padx=8, pady=(4, 1))
+        self.entry_url_nuvem = tk.Entry(frame_config_box, font=("Segoe UI", 8), bd=1, relief="solid", highlightbackground=self.BORDER_COLOR)
+        self.entry_url_nuvem.insert(0, "https://script.google.com/macros/s/AKfycybQoiNmyqc4DwM04p_sdVC50bJj3whQ_YQHm1clUipyvsIAVpYVY4X-pRijfWAQ981g/exec")
+        self.entry_url_nuvem.pack(fill="x", padx=8, pady=(0, 4))
+
+        frame_linha_senha = tk.Frame(frame_config_box, bg="#F1F5F9")
+        frame_linha_senha.pack(fill="x", padx=8, pady=(0, 6))
+
+        tk.Label(frame_linha_senha, text="Senha:", font=("Segoe UI", 8, "bold"), bg="#F1F5F9", fg=self.TEXT_MUTED).pack(side=tk.LEFT, padx=(0, 4))
+        self.entry_senha_nuvem = tk.Entry(frame_linha_senha, font=("Segoe UI", 8), width=12, bd=1, relief="solid", highlightbackground=self.BORDER_COLOR)
+        self.entry_senha_nuvem.insert(0, "A103114")
+        self.entry_senha_nuvem.pack(side=tk.LEFT, padx=(0, 8))
+
+        btn_salvar_config_nuvem = tk.Button(
+            frame_linha_senha, text="Salvar Conexão", bg=self.PRIMARY_COLOR, fg="white",
+            font=("Segoe UI", 8, "bold"), bd=0, padx=8, pady=2, cursor="hand2",
+            command=self._ao_salvar_config_nuvem
+        )
+        btn_salvar_config_nuvem.pack(side=tk.RIGHT)
+
+    def adicionar_log_nuvem(self, mensagem):
+        if hasattr(self, "text_log_nuvem"):
+            hora = datetime.now().strftime("%H:%M:%S")
+            self.text_log_nuvem.insert(tk.END, f"[{hora}] {mensagem}\n")
+            self.text_log_nuvem.see(tk.END)
+
+    def _ao_clicar_sincronizar_topo(self):
+        self._ao_clicar_sincronizar_tudo()
+
+    def _ao_clicar_sincronizar_tudo(self):
+        cb = self.callbacks.get("sincronizar_nuvem")
+        if cb:
+            self.adicionar_log_nuvem("Iniciando sincronização completa...")
+            cb()
+
+    def _ao_clicar_puxar_pedidos(self):
+        cb = self.callbacks.get("puxar_pedidos_nuvem")
+        if cb:
+            self.adicionar_log_nuvem("Buscando novos pedidos do aplicativo...")
+            cb()
+
+    def _ao_clicar_enviar_catalogo(self):
+        cb = self.callbacks.get("enviar_catalogo_nuvem")
+        if cb:
+            self.adicionar_log_nuvem("Enviando catálogo de preços para a nuvem...")
+            cb()
+
+    def _ao_clicar_testar_conexao(self):
+        cb = self.callbacks.get("testar_conexao_nuvem")
+        if cb:
+            self.adicionar_log_nuvem("Testando conexão com a nuvem...")
+            cb()
+
+    def _ao_salvar_config_nuvem(self):
+        url = self.entry_url_nuvem.get().strip()
+        senha = self.entry_senha_nuvem.get().strip()
+        cb = self.callbacks.get("salvar_config_nuvem")
+        if cb:
+            cb(url, senha)
+            self.adicionar_log_nuvem("Configurações de conexão salvas!")

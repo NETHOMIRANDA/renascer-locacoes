@@ -16,3 +16,11 @@ venv/
 
 # Segredos
 .env
+
+# Mobile app (Node)
+mobile/node_modules/
+mobile/dist/
+
+# Backups de dados de clientes
+backup-*.json
+config_nuvem.json
